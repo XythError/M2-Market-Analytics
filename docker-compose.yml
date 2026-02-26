@@ -1,0 +1,40 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: metin2-backend
+    ports:
+      - "8085:8000"
+    volumes:
+      - metin2-data:/app/data
+    environment:
+      - SEARCH_QUERY=Vollmond
+      - SERVER_NAME=Chimera
+    security_opt:
+      - seccomp=unconfined
+    restart: unless-stopped
+    networks:
+      - metin2-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://192.168.2.52:8085
+    container_name: metin2-frontend
+    ports:
+      - "3001:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - metin2-net
+
+networks:
+  metin2-net:
+    driver: bridge
+
+volumes:
+  metin2-data:
