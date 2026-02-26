@@ -1,6 +1,6 @@
 # M2 Market Analytics
 
-A full-stack market analysis dashboard for Metin2 — track item prices in real time, get Telegram alerts when prices drop, and manage your watchlist across every server.
+A full-stack market analysis dashboard for M2 — track item prices in real time, get Telegram alerts when prices drop, and manage your watchlist across every server.
 
 > **Based on [metin2-marketscanner](https://github.com/uzunbugra/metin2-marketscanner) by [@uzunbugra](https://github.com/uzunbugra).**
 > Huge thanks for building the original project — it was the foundation for everything here! 🙏
@@ -11,7 +11,7 @@ A full-stack market analysis dashboard for Metin2 — track item prices in real 
 
 | Feature | Description |
 |---|---|
-| **JSON-API Scraper** | Fetches data directly from the metin2alerts.com JSON API — no browser/Playwright required |
+| **JSON-API Scraper** | Fetches data directly from the target JSON API — no browser/Playwright required |
 | **100+ Servers** | Full server list (TR, DE, EN, ES, IT, PL, RO, CZ, …) with per-server data |
 | **Watchlist & Auto-Scrape** | Add items to a watchlist with configurable scrape intervals; the scheduler runs in the background |
 | **Telegram Alerts** | Configure a Telegram bot and set price thresholds — get notified instantly when a deal appears |
