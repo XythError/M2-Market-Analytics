@@ -22,7 +22,6 @@ def ensure_tables():
             query TEXT NOT NULL,
             server_name TEXT NOT NULL DEFAULT 'Chimera',
             is_active INTEGER NOT NULL DEFAULT 1,
-            interval_minutes INTEGER NOT NULL DEFAULT 20,
             last_scraped_at TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(query, server_name)
@@ -98,8 +97,8 @@ def ensure_watchlist_seeded():
         query = os.environ.get("SEARCH_QUERY", "Vollmond")
         server = os.environ.get("SERVER_NAME", "Chimera")
         cursor.execute(
-            "INSERT OR IGNORE INTO watchlist (query, server_name, interval_minutes) VALUES (?, ?, ?)",
-            (query, server, 20)
+            "INSERT OR IGNORE INTO watchlist (query, server_name) VALUES (?, ?)",
+            (query, server)
         )
         conn.commit()
         print(f"Seeded watchlist with default: '{query}' on '{server}'")
@@ -140,25 +139,40 @@ def mark_scraped(item_id):
     conn.close()
 
 
-def run_scraper_for(query, server_name):
-    """Run scraper subprocess for a specific query/server."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] Scraping '{query}' on '{server_name}'...")
+def perform_global_scrape(server_name="Chimera"):
+    """Run scraper subprocess globally for the server."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Executing Global Scrape for '{server_name}'...")
     try:
         env = os.environ.copy()
-        env["SEARCH_QUERY"] = query
         env["SERVER_NAME"] = server_name
         result = subprocess.run(
             [sys.executable, SCRAPER_PATH],
-            env=env, capture_output=True, text=True, timeout=600
+            env=env, capture_output=False, timeout=600
         )
         if result.returncode == 0:
-            print(f"  -> OK: {query}")
+            print(f"  -> GLOBAL SCRAPE OK")
+            return True
         else:
-            print(f"  -> FAIL: {result.stderr[:500]}")
+            print(f"  -> GLOBAL SCRAPE FAIL: exit code {result.returncode}")
+            return False
     except subprocess.TimeoutExpired:
-        print(f"  -> TIMEOUT for '{query}'")
+        print(f"  -> TIMEOUT for Global Scrape")
+        return False
     except Exception as e:
         print(f"  -> ERROR: {e}")
+        return False
+
+def clean_old_snapshots(days=14):
+    """Delete listing snapshots older than X days to prevent endless DB growth."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    cursor.execute("DELETE FROM listing_snapshots WHERE scraped_at < ?", (cutoff,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    if deleted > 0:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Auto-Cleanup: Deleted {deleted} old snapshots.")
 
 
 # ── Price Alert checking ────────────────────────────────────────
@@ -369,18 +383,42 @@ print("Scheduler started – reading watchlist from DB.")
 ensure_tables()
 ensure_watchlist_seeded()
 
+GLOBAL_INTERVAL_MIN = 10
+CLEANUP_INTERVAL_DAYS = 1
+
 if __name__ == "__main__":
     try:
+        server_name = os.environ.get("SERVER_NAME", "Chimera")
+        last_global_scrape = None
+        last_cleanup = None
+        
         while True:
-            due = get_due_items()
-            if due:
-                print(f"\n[{datetime.now().strftime('%H:%M:%S')}] {len(due)} watchlist item(s) due:")
-                for item in due:
-                    run_scraper_for(item["query"], item["server_name"])
-                    mark_scraped(item["id"])
-                    # Check price alerts after scraping
-                    check_alerts_for_item(item)
-                    check_percentage_alerts_for_item(item)
+            now = datetime.now()
+            
+            # 1. Global Scrape Check
+            if last_global_scrape is None or now - last_global_scrape >= timedelta(minutes=GLOBAL_INTERVAL_MIN):
+                success = perform_global_scrape(server_name)
+                last_global_scrape = datetime.now()
+                
+                if success:
+                    # Check alerts for all active watchlist items
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.row_factory = sqlite3.Row
+                    items = conn.execute("SELECT * FROM watchlist WHERE is_active = 1").fetchall()
+                    conn.close()
+                    
+                    if items:
+                        print(f"  -> Checking alerts for {len(items)} watchlist items...")
+                        for it in items:
+                            mark_scraped(it["id"])
+                            check_alerts_for_item(it)
+                            check_percentage_alerts_for_item(it)
+
+            # 2. Cleanup Check
+            if last_cleanup is None or now - last_cleanup >= timedelta(days=CLEANUP_INTERVAL_DAYS):
+                clean_old_snapshots(days=14)
+                last_cleanup = datetime.now()
+                
             time.sleep(TICK_SECONDS)
     except KeyboardInterrupt:
         print("Scheduler stopped.")

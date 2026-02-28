@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import Navbar from '@/components/Navbar';
 import StatsCard from '@/components/StatsCard';
 import ListingTable from '@/components/ListingTable';
 import PriceChart from '@/components/PriceChart';
 import FavoritesList from '@/components/FavoritesList';
 import { getListings, getTopItems, getPriceHistory, triggerScrape, getServers, getWatchlist, addWatchlistItem, removeWatchlistItem, toggleWatchlistItem, getTelegramSettings, saveTelegramSettings, toggleTelegram, testTelegram, createAlert, deleteAlert, toggleAlert, getFakeSellers, addFakeSeller, removeFakeSeller, createPercentageAlert, deletePercentageAlert, togglePercentageAlert, Listing, PricePoint, WatchlistItem, TelegramSettings, PriceAlert, FakeSeller, PercentageAlert } from '@/lib/api';
-import { TrendingUp, ShoppingCart, Server, LineChart, Search, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Clock, Plus, Trash2, Power, List, Bell, BellOff, Send, Settings, AlertTriangle, UserX, Star } from 'lucide-react';
+import { TrendingUp, ShoppingCart, Server, LineChart, Search, RefreshCw, ChevronDown, ChevronLeft, ChevronRight, Clock, Plus, Trash2, Power, List, Bell, BellOff, Send, Settings, AlertTriangle, UserX, Star, Play, Pause } from 'lucide-react';
 
 export default function Home() {
   const [listings, setListings] = useState<Listing[]>([]);
@@ -24,7 +24,6 @@ export default function Home() {
   const [upgradeFilter, setUpgradeFilter] = useState<string>("ALL");
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [watchlistQuery, setWatchlistQuery] = useState("");
-  const [watchlistInterval, setWatchlistInterval] = useState(20);
   const [showWatchlist, setShowWatchlist] = useState(false);
 
   // Telegram state
@@ -49,6 +48,79 @@ export default function Home() {
 
   // Favorites state (persisted in localStorage)
   const [favorites, setFavorites] = useState<string[]>([]);
+
+  // Auto-cycle chart mode
+  const [autoMode, setAutoMode] = useState(false);
+  const [autoPhase, setAutoPhase] = useState(0); // current phase index
+  const [showAutoSettings, setShowAutoSettings] = useState(false);
+  const autoItemIndexRef = useRef(0);
+  const autoTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoPhaseRef = useRef(0);
+  const chartRef = useRef<HTMLDivElement>(null);
+
+  // Configurable auto-mode phases
+  const [autoPhaseConfig, setAutoPhaseConfig] = useState([
+    { series: { avg: false, bottom20: true, min: true }, seconds: 3 },
+    { series: { avg: true, bottom20: true, min: true }, seconds: 3 },
+  ]);
+  const autoPhaseConfigRef = useRef(autoPhaseConfig);
+
+  // Keep refs in sync
+  useEffect(() => { autoPhaseRef.current = autoPhase; }, [autoPhase]);
+  useEffect(() => { autoPhaseConfigRef.current = autoPhaseConfig; }, [autoPhaseConfig]);
+
+  // Helper to update a phase config field
+  const updatePhaseConfig = (phaseIdx: number, field: string, value: any) => {
+    setAutoPhaseConfig(prev => prev.map((p, i) => {
+      if (i !== phaseIdx) return p;
+      if (field === 'seconds') return { ...p, seconds: Math.max(1, Number(value) || 1) };
+      // field is a series key
+      return { ...p, series: { ...p.series, [field]: value } };
+    }));
+  };
+
+  // Auto-cycle timer using chained setTimeout for variable durations
+  useEffect(() => {
+    if (!autoMode) {
+      if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+      autoTimerRef.current = null;
+      setAutoPhase(0);
+      return;
+    }
+
+    setAutoPhase(0);
+
+    const tick = () => {
+      const cfg = autoPhaseConfigRef.current;
+      const curPhase = autoPhaseRef.current;
+      const nextPhase = (curPhase + 1) % cfg.length;
+
+      // If wrapping back to phase 0, advance to next chart item
+      if (nextPhase === 0) {
+        window.dispatchEvent(new CustomEvent('autoChartNext'));
+      }
+
+      setAutoPhase(nextPhase);
+      autoTimerRef.current = setTimeout(tick, cfg[nextPhase].seconds * 1000);
+    };
+
+    // Start first timeout with phase 0 duration
+    autoTimerRef.current = setTimeout(tick, autoPhaseConfig[0].seconds * 1000);
+
+    return () => {
+      if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+      autoTimerRef.current = null;
+    };
+  }, [autoMode]);
+
+  // Listen for auto-chart-next events
+  useEffect(() => {
+    const handler = () => {
+      handleChartNav('next');
+    };
+    window.addEventListener('autoChartNext', handler);
+    return () => window.removeEventListener('autoChartNext', handler);
+  });
 
   // Load favorites from localStorage on mount
   useEffect(() => {
@@ -163,7 +235,7 @@ export default function Home() {
   const handleAddToWatchlist = async () => {
     if (!watchlistQuery.trim()) return;
     try {
-      await addWatchlistItem(watchlistQuery.trim(), selectedServer, watchlistInterval);
+      await addWatchlistItem(watchlistQuery.trim(), selectedServer);
       setWatchlistQuery("");
       const updated = await getWatchlist();
       setWatchlist(updated);
@@ -320,23 +392,45 @@ export default function Home() {
     ? watchlistQueries.findIndex(q => selectedItemForChart.toLowerCase().includes(q.toLowerCase()) || q.toLowerCase().includes(selectedItemForChart.toLowerCase()))
     : -1;
 
-  const handleChartNav = async (direction: 'prev' | 'next') => {
+  const handleChartNav = async (direction: 'prev' | 'next', skipCount = 0) => {
     if (watchlistQueries.length === 0) return;
+    // Guard: prevent infinite loop if all items have no data
+    if (skipCount >= watchlistQueries.length) return;
+
     let newIndex: number;
-    if (currentWatchlistIndex === -1) {
-      newIndex = 0;
-    } else {
+    if (autoMode) {
+      // In auto mode, use the tracked index
       newIndex = direction === 'next'
-        ? (currentWatchlistIndex + 1) % watchlistQueries.length
-        : (currentWatchlistIndex - 1 + watchlistQueries.length) % watchlistQueries.length;
+        ? (autoItemIndexRef.current + 1) % watchlistQueries.length
+        : (autoItemIndexRef.current - 1 + watchlistQueries.length) % watchlistQueries.length;
+    } else {
+      if (currentWatchlistIndex === -1) {
+        newIndex = 0;
+      } else {
+        newIndex = direction === 'next'
+          ? (currentWatchlistIndex + 1) % watchlistQueries.length
+          : (currentWatchlistIndex - 1 + watchlistQueries.length) % watchlistQueries.length;
+      }
     }
+
+    autoItemIndexRef.current = newIndex;
     const query = watchlistQueries[newIndex];
     setSelectedItemForChart(query);
     try {
       const history = await getPriceHistory(query);
+      if (history.length === 0 && autoMode) {
+        // No data - skip to next item immediately
+        handleChartNav(direction, skipCount + 1);
+        return;
+      }
       setPriceHistory(history);
     } catch (e) {
       console.error("Failed to fetch history for", query, e);
+      if (autoMode) {
+        // On error, skip to next item
+        handleChartNav(direction, skipCount + 1);
+        return;
+      }
     }
   };
 
@@ -346,6 +440,19 @@ export default function Home() {
     (selectedItemForChart.toLowerCase().includes(w.query.toLowerCase()) ||
       w.query.toLowerCase().includes(selectedItemForChart.toLowerCase()))
   );
+
+  // Sync autoItemIndexRef when user manually selects an item
+  useEffect(() => {
+    if (selectedItemForChart && !autoMode) {
+      const idx = watchlistQueries.findIndex(q =>
+        selectedItemForChart.toLowerCase().includes(q.toLowerCase()) ||
+        q.toLowerCase().includes(selectedItemForChart.toLowerCase())
+      );
+      if (idx !== -1) {
+        autoItemIndexRef.current = idx;
+      }
+    }
+  }, [selectedItemForChart, watchlistQueries]);
 
   // Filter listings based on upgrade level
   const filteredListings = listings.filter(item => {
@@ -592,7 +699,7 @@ export default function Home() {
             >
               <div className="flex items-center gap-2">
                 <List className="text-emerald-500" size={20} />
-                <h3 className="text-lg font-semibold">Auto-Scrape Watchlist</h3>
+                <h3 className="text-lg font-semibold">Favoriten & Alarme</h3>
                 <span className="ml-2 bg-emerald-600/20 text-emerald-400 text-xs px-2 py-0.5 rounded-full">
                   {watchlist.filter(w => w.is_active).length} active
                 </span>
@@ -612,21 +719,6 @@ export default function Home() {
                     onChange={(e) => setWatchlistQuery(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleAddToWatchlist()}
                   />
-                  <div className="flex items-center gap-2">
-                    <label className="text-slate-400 text-sm whitespace-nowrap">Interval:</label>
-                    <select
-                      value={watchlistInterval}
-                      onChange={(e) => setWatchlistInterval(Number(e.target.value))}
-                      className="bg-slate-900 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-emerald-500"
-                    >
-                      <option value={10}>10 min</option>
-                      <option value={20}>20 min</option>
-                      <option value={30}>30 min</option>
-                      <option value={60}>1 h</option>
-                      <option value={120}>2 h</option>
-                      <option value={360}>6 h</option>
-                    </select>
-                  </div>
                   <button
                     onClick={handleAddToWatchlist}
                     disabled={!watchlistQuery.trim()}
@@ -651,7 +743,6 @@ export default function Home() {
                         <tr className="text-slate-400 border-b border-slate-700">
                           <th className="text-left py-2 px-3">Item</th>
                           <th className="text-left py-2 px-3">Server</th>
-                          <th className="text-center py-2 px-3">Interval</th>
                           <th className="text-center py-2 px-3">Letzter Scan</th>
                           <th className="text-center py-2 px-3">Alerts</th>
                           <th className="text-center py-2 px-3">Status</th>
@@ -662,14 +753,19 @@ export default function Home() {
                         {watchlist.map(item => (
                           <React.Fragment key={item.id}>
                             <tr className={`border-b border-slate-700/50 ${item.is_active ? '' : 'opacity-50'}`}>
-                              <td className="py-2 px-3 text-white font-medium">{item.query}</td>
-                              <td className="py-2 px-3 text-slate-300">{item.server_name}</td>
-                              <td className="py-2 px-3 text-center text-slate-300">
-                                <span className="inline-flex items-center gap-1"><Clock size={14} /> {item.interval_minutes}m</span>
+                              <td
+                                className="py-2 px-3 text-white font-medium cursor-pointer hover:text-emerald-400 transition-colors"
+                                onClick={() => {
+                                  handleTopItemClick(item.query);
+                                  chartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                }}
+                              >
+                                {item.query}
                               </td>
+                              <td className="py-2 px-3 text-slate-300">{item.server_name}</td>
                               <td className="py-2 px-3 text-center text-slate-400">
                                 {item.last_scraped_at
-                                  ? new Date(item.last_scraped_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                                  ? new Date((item.last_scraped_at.replace(' ', 'T') + (item.last_scraped_at.endsWith('Z') ? '' : 'Z'))).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
                                   : '—'}
                               </td>
                               <td className="py-2 px-3 text-center">
@@ -751,7 +847,7 @@ export default function Home() {
                                         </button>
                                         {alert.last_triggered_at && (
                                           <span className="text-[10px] text-slate-500 ml-1">
-                                            Letzter: {new Date(alert.last_triggered_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                            Letzter: {new Date(alert.last_triggered_at.replace(' ', 'T') + (alert.last_triggered_at.endsWith('Z') ? '' : 'Z')).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                                           </span>
                                         )}
                                       </div>
@@ -822,49 +918,137 @@ export default function Home() {
         </div>
 
         {/* Charts Section with Navigation */}
-        {selectedItemForChart && (
-          <div className="w-full">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <LineChart className="text-blue-500" size={24} />
-                <h2 className="text-xl font-bold text-white">Market Analysis: {selectedItemForChart}</h2>
-              </div>
-              {/* Chart Navigation */}
-              {watchlistQueries.length > 0 && (
+        <div ref={chartRef} className="col-span-1 flex flex-col">
+          {selectedItemForChart && (
+            <div className="w-full">
+              <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleChartNav('prev')}
-                    className="p-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
-                    title="Vorheriges Item"
-                  >
-                    <ChevronLeft size={18} />
-                  </button>
-                  <span className="text-sm text-slate-400 min-w-[50px] text-center">
-                    {currentWatchlistIndex >= 0 ? `${currentWatchlistIndex + 1}/${watchlistQueries.length}` : `—/${watchlistQueries.length}`}
-                  </span>
-                  <button
-                    onClick={() => handleChartNav('next')}
-                    className="p-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
-                    title="Nächstes Item"
-                  >
-                    <ChevronRight size={18} />
-                  </button>
+                  <LineChart className="text-blue-500" size={24} />
+                  <h2 className="text-xl font-bold text-white">Market Analysis: {selectedItemForChart}</h2>
+                  {autoMode && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-600/20 text-green-400 animate-pulse">
+                      AUTO Phase {autoPhase + 1}/{autoPhaseConfig.length} · {autoPhaseConfig[autoPhase]?.seconds}s
+                    </span>
+                  )}
+                </div>
+                {/* Chart Navigation */}
+                {watchlistQueries.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleChartNav('prev')}
+                      className="p-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
+                      title="Vorheriges Item"
+                      disabled={autoMode}
+                    >
+                      <ChevronLeft size={18} />
+                    </button>
+                    <span className="text-sm text-slate-400 min-w-[50px] text-center">
+                      {currentWatchlistIndex >= 0 ? `${currentWatchlistIndex + 1}/${watchlistQueries.length}` : `—/${watchlistQueries.length}`}
+                    </span>
+                    <button
+                      onClick={() => handleChartNav('next')}
+                      className="p-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white transition-colors"
+                      title="Nächstes Item"
+                      disabled={autoMode}
+                    >
+                      <ChevronRight size={18} />
+                    </button>
+                    <button
+                      onClick={() => setAutoMode(prev => !prev)}
+                      className={`p-2 rounded-lg transition-colors flex items-center gap-1.5 text-sm font-medium ${autoMode
+                        ? 'bg-green-600/20 text-green-400 hover:bg-green-600/30 ring-1 ring-green-500/40'
+                        : 'bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white'
+                        }`}
+                      title={autoMode ? 'Auto-Modus stoppen' : 'Auto-Modus starten'}
+                    >
+                      {autoMode ? <Pause size={16} /> : <Play size={16} />}
+                      Auto
+                    </button>
+                    <button
+                      onClick={() => setShowAutoSettings(prev => !prev)}
+                      className={`p-2 rounded-lg transition-colors ${showAutoSettings ? 'bg-slate-600 text-white' : 'bg-slate-700 text-slate-400 hover:text-white hover:bg-slate-600'}`}
+                      title="Auto-Modus Einstellungen"
+                    >
+                      <Settings size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Auto-Mode Settings Panel */}
+              {showAutoSettings && (
+                <div className="mb-4 p-4 bg-slate-800/80 border border-slate-700 rounded-lg space-y-3">
+                  <h4 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+                    <Settings size={14} className="text-green-400" />
+                    Auto-Modus Konfiguration
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {autoPhaseConfig.map((phase, idx) => (
+                      <div key={idx} className={`p-3 rounded-lg border ${autoMode && autoPhase === idx ? 'border-green-500/50 bg-green-600/5' : 'border-slate-700 bg-slate-900/50'}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-semibold text-slate-400">Phase {idx + 1}</span>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              min={1}
+                              max={60}
+                              value={phase.seconds}
+                              onChange={e => updatePhaseConfig(idx, 'seconds', e.target.value)}
+                              className="w-14 bg-slate-800 border border-slate-600 rounded px-2 py-0.5 text-xs text-white text-center font-mono focus:outline-none focus:border-green-500"
+                              disabled={autoMode}
+                            />
+                            <span className="text-[11px] text-slate-500">Sek.</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {([
+                            { key: 'avg', label: 'Ø Preis', color: 'rgb(59, 130, 246)' },
+                            { key: 'bottom20', label: 'Ø Günstigste 20%', color: 'rgb(16, 185, 129)' },
+                            { key: 'min', label: 'Minimum', color: 'rgb(251, 191, 36)' },
+                          ] as const).map(s => (
+                            <label
+                              key={s.key}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium cursor-pointer transition-all border ${(phase.series as any)[s.key]
+                                ? 'border-slate-500 bg-slate-700 text-white'
+                                : 'border-slate-700 bg-slate-800/50 text-slate-500'
+                                } ${autoMode ? 'opacity-60 pointer-events-none' : ''}`}
+                            >
+                              <input
+                                type="checkbox"
+                                className="sr-only"
+                                checked={(phase.series as any)[s.key]}
+                                onChange={e => updatePhaseConfig(idx, s.key, e.target.checked)}
+                                disabled={autoMode}
+                              />
+                              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: s.color, opacity: (phase.series as any)[s.key] ? 1 : 0.3 }} />
+                              {s.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Gesamtzeit pro Item: {autoPhaseConfig.reduce((sum, p) => sum + p.seconds, 0)}s · Einstellungen sind nur bei gestopptem Auto-Modus änderbar.
+                  </p>
                 </div>
               )}
+
+              <div>
+                <PriceChart
+                  itemName={selectedItemForChart}
+                  data={priceHistory}
+                  watchlistId={currentWatchlistItem?.id ?? null}
+                  percentageAlerts={currentWatchlistItem?.percentage_alerts ?? []}
+                  onCreatePercentageAlert={handleCreatePercentageAlert}
+                  onDeletePercentageAlert={handleDeletePercentageAlert}
+                  onTogglePercentageAlert={handleTogglePercentageAlert}
+                  overrideVisibleSeries={autoMode ? autoPhaseConfig[autoPhase]?.series ?? null : null}
+                />
+              </div>
             </div>
-            <div>
-              <PriceChart
-                itemName={selectedItemForChart}
-                data={priceHistory}
-                watchlistId={currentWatchlistItem?.id ?? null}
-                percentageAlerts={currentWatchlistItem?.percentage_alerts ?? []}
-                onCreatePercentageAlert={handleCreatePercentageAlert}
-                onDeletePercentageAlert={handleDeletePercentageAlert}
-                onTogglePercentageAlert={handleTogglePercentageAlert}
-              />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Main Content Area */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -912,7 +1096,10 @@ export default function Home() {
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
               <FavoritesList
                 favorites={favorites}
-                onSelectItem={handleTopItemClick}
+                onSelectItem={(itemName) => {
+                  handleTopItemClick(itemName);
+                  chartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }}
                 onRemoveFavorite={removeFavorite}
                 selectedItem={selectedItemForChart}
               />
@@ -931,7 +1118,10 @@ export default function Home() {
                     <li
                       key={idx}
                       className="flex justify-between items-center border-b border-slate-700 pb-2 last:border-0 last:pb-0 cursor-pointer hover:bg-slate-700/50 p-2 rounded transition-colors"
-                      onClick={() => handleTopItemClick(item.name)}
+                      onClick={() => {
+                        handleTopItemClick(item.name);
+                        chartRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }}
                     >
                       <div className="flex items-center gap-2">
                         <button

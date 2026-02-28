@@ -270,8 +270,25 @@ async def fetch_item_names(lang: str = "de") -> dict[str, str]:
 
 
 async def fetch_server_items(server_id: str) -> list[dict]:
-    """Fetch ALL market listings for a server as JSON (bypasses browser entirely)."""
+    """Fetch ALL market listings for a server as JSON (bypasses browser entirely). Cache for 5 mins."""
     import time
+    
+    cache_file = os.path.join(os.path.dirname(__file__), "..", "data", f"cache_{server_id}.json")
+    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+    
+    # Check if cache is fresh (less than 5 minutes old)
+    if os.path.exists(cache_file):
+        mtime = os.path.getmtime(cache_file)
+        if time.time() - mtime < 300:  # 5 minutes
+            print(f"Loading server data from cache ({cache_file})...")
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    items = json.load(f)
+                    print(f"Loaded {len(items)} items from local cache.")
+                    return items
+            except Exception as e:
+                print(f"Cache read error: {e}, fetching fresh data.")
+                
     ts = int(time.time() * 1000)
     rand = random.randint(100000, 999999)
     url = STORE_DATA_URL.format(server_id=server_id, ts=ts, rand=rand)
@@ -286,6 +303,14 @@ async def fetch_server_items(server_id: str) -> list[dict]:
         resp.raise_for_status()
         items = resp.json()
         print(f"Fetched {len(items)} items from server ({len(resp.content) / 1024 / 1024:.1f} MB).")
+        
+        # Save to cache
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False)
+        except Exception as e:
+            print(f"Failed to write cache: {e}")
+            
         return items
 
 def init_db():
@@ -303,110 +328,6 @@ def init_db():
     conn.close()
     print(f"Database initialized at {DB_PATH}")
 
-
-async def analyze_market(search_query):
-    """Calculates market stats and saves to price_history."""
-    print(f"Analyzing market for '{search_query}'...")
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    try:
-        # Load fake seller names to exclude from price calculations
-        cursor.execute("SELECT seller_name FROM fake_sellers")
-        fake_sellers = set(row[0] for row in cursor.fetchall())
-        if fake_sellers:
-            print(f"Filtering out {len(fake_sellers)} fake seller(s): {', '.join(fake_sellers)}")
-
-        # Step 1: Get all unit prices per item name (with seller for filtering)
-        query = """
-            SELECT 
-                i.name,
-                CAST(l.total_price_yang AS REAL) / l.quantity as unit_price,
-                l.seller_name
-            FROM listings l
-            JOIN items i ON l.item_id = i.id
-            WHERE i.name LIKE ? AND l.quantity > 0
-            ORDER BY i.name, unit_price ASC
-        """
-        
-        cursor.execute(query, (f"%{search_query}%",))
-        rows = cursor.fetchall()
-        
-        if not rows:
-            print(f"No listings found for '{search_query}'.")
-            return
-        
-        # Group by item name, excluding fake sellers
-        from collections import defaultdict
-        items_prices = defaultdict(list)
-        for item_name, unit_price, seller_name in rows:
-            if seller_name in fake_sellers:
-                continue
-            items_prices[item_name].append(unit_price)
-        
-        timestamp = datetime.now()
-        
-        for item_name, prices in items_prices.items():
-            prices.sort()
-            total = len(prices)
-            avg_price = sum(prices) / total
-            min_price = prices[0]
-            
-            # Bottom 20%: cheapest 20% of listings (at least 1)
-            bottom_count = max(1, int(total * 0.2))
-            bottom_prices = prices[:bottom_count]
-            avg_bottom20 = sum(bottom_prices) / len(bottom_prices)
-            
-            # Save to history
-            cursor.execute("""
-                INSERT INTO price_history (item_name, avg_unit_price, min_unit_price, avg_bottom20_price, total_listings, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (item_name, int(avg_price), int(min_price), int(avg_bottom20), total, timestamp))
-            
-            print(f"Recorded history for {item_name}: Avg {int(avg_price):,}, Min {int(min_price):,}, Bottom20% {int(avg_bottom20):,}, Count {total}")
-            
-            # Export JSON for this item
-            export_history_to_json(item_name, cursor)
-            
-        conn.commit()
-        
-    except Exception as e:
-        print(f"Error in market analysis: {e}")
-    finally:
-        conn.close()
-
-def export_history_to_json(item_name, cursor):
-    """Exports price history for an item to JSON for Chart.js."""
-    try:
-        cursor.execute("""
-            SELECT timestamp, avg_unit_price, min_unit_price, total_listings 
-            FROM price_history 
-            WHERE item_name = ? 
-            ORDER BY timestamp ASC
-        """, (item_name,))
-        
-        rows = cursor.fetchall()
-        data = [
-            {
-                "timestamp": row[0],
-                "avg_unit_price": row[1],
-                "min_unit_price": row[2],
-                "total_listings": row[3]
-            } 
-            for row in rows
-        ]
-        
-        # Clean filename
-        safe_name = "".join([c for c in item_name if c.isalnum() or c in (' ', '-', '_')]).strip().replace(' ', '_')
-        filepath = os.path.join(HISTORY_EXPORT_DIR, f"history_{safe_name}.json")
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            
-        print(f"Exported history to {filepath}")
-        
-    except Exception as e:
-        print(f"Error exporting JSON for {item_name}: {e}")
 
 # Common item name mappings (Short/Slang -> Full Game Name, German)
 ITEM_NAME_MAPPINGS = {
@@ -427,56 +348,35 @@ ITEM_NAME_MAPPINGS = {
     "himmelsauge": "Himmelsaugen-Halskette",
 }
 
-async def scrape_store(search_query=None, server_name=None, max_pages=50):
+async def scrape_store(server_name=None, max_pages=50):
     """
-    Fetch market data directly from metin2alerts JSON API.
-    No headless browser needed — just HTTP requests!
+    Fetch market data natively for the whole server globally.
     """
-    if not search_query:
-        search_query = os.environ.get("SEARCH_QUERY")
     if not server_name:
         server_name = os.environ.get("SERVER_NAME", "Chimera")
-    if not search_query:
-        print("No search query provided.")
-        return
 
     server_value = SERVER_MAPPING.get(server_name, "531")
     lang = "de"  # Always German
-    print(f"Scraping for server: {server_name} (ID: {server_value}, lang: {lang})")
-
-    # Resolve shorthand search queries
-    base_name = ITEM_NAME_MAPPINGS.get(search_query.lower(), search_query)
-    search_lower = base_name.lower()
+    print(f"Global Scrape for server: {server_name} (ID: {server_value}, lang: {lang})")
 
     try:
-        # 1. Fetch localized item names
         item_names = await fetch_item_names(lang)
-
-        # 2. Fetch ALL items for this server
         all_items = await fetch_server_items(server_value)
 
-        # 3. Filter items matching the search query
         matching_listings = []
         for raw_item in all_items:
             vnum = raw_item.get("vnum", 0)
-            # Look up localized name by vnum (same as metin2alerts client does)
             localized_name = item_names.get(str(vnum), raw_item.get("name", "Unknown"))
-
-            # Case-insensitive substring match
-            if search_lower not in localized_name.lower():
-                continue
-
+            
             yang = raw_item.get("yangPrice", 0) or 0
             won = raw_item.get("wonPrice", 0) or 0
             quantity = raw_item.get("quantity", 1) or 1
             seller = raw_item.get("seller", "Unknown") or "Unknown"
             total_yang = won * 100_000_000 + yang
 
-            # Skip items with zero price
             if total_yang <= 0:
                 continue
 
-            # Extract bonus attributes – resolve IDs to German names
             bonuses = []
             for attr in (raw_item.get("attrs") or []):
                 if isinstance(attr, (list, tuple)) and len(attr) >= 2 and attr[0]:
@@ -496,162 +396,114 @@ async def scrape_store(search_query=None, server_name=None, max_pages=50):
                 "bonuses": bonuses,
             })
 
-        print(f"Found {len(matching_listings)} listings matching '{base_name}' on {server_name}.")
+        print(f"Found {len(matching_listings)} listings total on {server_name}.")
 
         if not matching_listings:
-            print(f"No items found for '{search_query}' on server {server_name}.")
             return
 
-        # 4. Deduplicate and save
         from collections import defaultdict
         grouped = defaultdict(list)
         for listing in matching_listings:
             grouped[listing["item_name"]].append(listing)
 
-        for item_name, listings in grouped.items():
-            unique = []
-            seen = set()
-            for item in listings:
-                sig = (item["item_name"], item["seller"], item["total_yang"], item["quantity"])
-                if sig not in seen:
-                    seen.add(sig)
-                    unique.append(item)
-            await save_to_db(unique, item_name, server_name)
+        await save_to_db_global(grouped, server_name)
 
-        # 5. Analyze market (creates price_history entries)
-        await analyze_market(search_query)
-
-        print(f"Scrape complete for '{search_query}' on {server_name}.")
+        print(f"Global scrape complete for {server_name}.")
 
     except httpx.HTTPStatusError as e:
         print(f"HTTP error fetching data: {e.response.status_code} {e.response.reason_phrase}")
+        sys.exit(1)
     except httpx.RequestError as e:
         print(f"Network error: {e}")
+        sys.exit(1)
     except Exception as e:
         print(f"Scrape error: {e}")
         import traceback
         traceback.print_exc()
+        sys.exit(1)
 
 
 
-async def save_to_db(listings, search_query, server_name):
-
+async def save_to_db_global(grouped_listings, server_name):
     conn = sqlite3.connect(DB_PATH)
-
     cursor = conn.cursor()
 
-    # Ensure server exists and get its ID
-
     cursor.execute("INSERT OR IGNORE INTO servers (name) VALUES (?)", (server_name,))
-
     cursor.execute("SELECT id FROM servers WHERE name=?", (server_name,))
-
     server_id = cursor.fetchone()[0]
 
-    
-
-    if search_query:
-
-         # Only delete listings for THIS server and THIS search query
-
-         cursor.execute("""
-
-            DELETE FROM listings 
-
-            WHERE server_id = ? AND item_id IN (SELECT id FROM items WHERE name LIKE ?)
-
-         """, (server_id, f"%{search_query}%"))
-
-         cursor.execute("DELETE FROM listing_bonuses WHERE listing_id NOT IN (SELECT id FROM listings)")
-
-    
+    # Clear current live listings for this server entirely
+    cursor.execute("DELETE FROM listings WHERE server_id = ?", (server_id,))
+    cursor.execute("DELETE FROM listing_bonuses WHERE listing_id NOT IN (SELECT id FROM listings)")
 
     now = datetime.now().isoformat()
-
     count = 0
 
-    for item in listings:
+    unique_item_names = list(grouped_listings.keys())
+    cursor.executemany("INSERT OR IGNORE INTO items (name, category) VALUES (?, ?)", 
+                       [(name, "General") for name in unique_item_names])
 
-        cursor.execute("INSERT OR IGNORE INTO items (name, category) VALUES (?, ?)", (item['item_name'], "General"))
+    cursor.execute("SELECT name, id FROM items")
+    item_id_map = {row[0]: row[1] for row in cursor.fetchall()}
 
-        item_id = cursor.execute("SELECT id FROM items WHERE name=?", (item['item_name'],)).fetchone()[0]
+    unique_items_list = []
+    for item_name, listings in grouped_listings.items():
+        unique = []
+        seen = set()
+        for item in listings:
+            sig = (item["item_name"], item["seller"], item["total_yang"], item["quantity"])
+            if sig not in seen:
+                seen.add(sig)
+                unique.append(item)
+        unique_items_list.extend(unique)
 
-        
-
-        cursor.execute("""
-
-            INSERT INTO listings (server_id, item_id, seller_name, quantity, price_won, price_yang, total_price_yang)
-
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-
-        """, (server_id, item_id, item['seller'], item['quantity'], item['price_won'], item['price_yang'], item['total_yang']))
-
-        
-
-        listing_id = cursor.lastrowid
-
-        for bonus in item['bonuses']:
-
-            if bonus:
-
-                if isinstance(bonus, dict):
-
-                    cursor.execute("INSERT INTO listing_bonuses (listing_id, bonus_name, bonus_value) VALUES (?, ?, ?)",
-
-                                   (listing_id, bonus.get('name', ''), bonus.get('value', '')))
-
-                else:
-
-                    cursor.execute("INSERT INTO listing_bonuses (listing_id, bonus_name, bonus_value) VALUES (?, ?, ?)",
-
-                                   (listing_id, str(bonus), ""))
-
-        # Archive to listing_snapshots for retroactive fake-seller filtering
-
-        unit_price = int(item['total_yang'] / max(item['quantity'], 1))
-
-        cursor.execute("""
-
-            INSERT INTO listing_snapshots (item_name, seller_name, server_name, quantity, price_won, price_yang, total_price_yang, unit_price, scraped_at)
-
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-
-        """, (item['item_name'], item['seller'], server_name, item['quantity'], item['price_won'], item['price_yang'], item['total_yang'], unit_price, now))
-
-        count += 1
-
+    # Fast bulk insert
+    for item in unique_items_list:
+        item_id = item_id_map.get(item['item_name'])
+        if not item_id:
+            continue
             
-
+        cursor.execute("""
+            INSERT INTO listings (server_id, item_id, seller_name, quantity, price_won, price_yang, total_price_yang)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (server_id, item_id, item['seller'], item['quantity'], item['price_won'], item['price_yang'], item['total_yang']))
+        
+        listing_id = cursor.lastrowid
+        
+        for bonus in item['bonuses']:
+            if bonus:
+                if isinstance(bonus, dict):
+                    cursor.execute("INSERT INTO listing_bonuses (listing_id, bonus_name, bonus_value) VALUES (?, ?, ?)",
+                                   (listing_id, bonus.get('name', ''), bonus.get('value', '')))
+                else:
+                    cursor.execute("INSERT INTO listing_bonuses (listing_id, bonus_name, bonus_value) VALUES (?, ?, ?)",
+                                   (listing_id, str(bonus), ""))
+                                   
+        # Snapshot
+        unit_price = int(item['total_yang'] / max(item['quantity'], 1))
+        cursor.execute("""
+            INSERT INTO listing_snapshots (item_name, seller_name, server_name, quantity, price_won, price_yang, total_price_yang, unit_price, scraped_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (item['item_name'], item['seller'], server_name, item['quantity'], item['price_won'], item['price_yang'], int(item['total_yang']), unit_price, now))
+        
+        count += 1
+            
     conn.commit()
-
     conn.close()
-
-    print(f"Saved {count} listings (+ snapshots) for {server_name}.")
-
+    print(f"Saved {count} listings (+ snapshots) globally for {server_name}.")
 
 
-async def run_bot(interval_minutes=20):
 
-    """Infinite loop for the bot."""
-
-    print(f"Starting Market Bot (Interval: {interval_minutes} mins)")
-
-    search_query = os.environ.get("SEARCH_QUERY", "Vollmond") # Default item to watch (German)
-
+async def run_bot(interval_minutes=10):
+    """Infinite loop for the bot (Global extraction)."""
+    print(f"Starting Global Market Bot (Interval: {interval_minutes} mins)")
     server_name = os.environ.get("SERVER_NAME", "Chimera")
-
     max_pages = int(os.environ.get("MAX_PAGES", "50"))
-
     
-
     while True:
-
-        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Bot execution started for {server_name}...")
-
-        await scrape_store(search_query, server_name, max_pages=max_pages)
-
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Global bot execution started for {server_name}...")
+        await scrape_store(server_name, max_pages=max_pages)
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Sleeping for {interval_minutes} minutes...")
-
         await asyncio.sleep(interval_minutes * 60)
 
 
@@ -682,31 +534,16 @@ if __name__ == "__main__":
 
     
 
-    if args.query:
-
-        os.environ["SEARCH_QUERY"] = args.query
-
     if args.server:
-
         os.environ["SERVER_NAME"] = args.server
-
     
-
     max_pages = int(os.environ.get("MAX_PAGES", str(args.max_pages)))
-
         
-
     if args.bot:
-
         try:
-
             asyncio.run(run_bot(args.interval))
-
         except KeyboardInterrupt:
-
             print("Bot stopped by user.")
-
     else:
-
-        asyncio.run(scrape_store(max_pages=max_pages))
+        asyncio.run(scrape_store(server_name=os.environ.get("SERVER_NAME"), max_pages=max_pages))
 

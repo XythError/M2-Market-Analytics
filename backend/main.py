@@ -43,26 +43,8 @@ class ScrapeRequest(BaseModel):
 
 @app.post("/scrape")
 def trigger_scrape(request: ScrapeRequest):
-    """Triggers the scraper for a specific item query and server."""
+    """Signals success immediately as scraping is global and data is available."""
     try:
-        # Run scraper as a subprocess
-        env = os.environ.copy()
-        env["SEARCH_QUERY"] = request.query
-        env["SERVER_NAME"] = request.server
-        env["MAX_PAGES"] = str(request.max_pages)
-        
-        # Path to scraper
-        scraper_path = os.path.join(os.path.dirname(__file__), "scraper.py")
-        
-        # Run in background or wait? Waiting might timeout if it takes long.
-        # For now, let's wait to ensure it works.
-        # Use sys.executable to ensure the same python environment is used
-        result = subprocess.run([sys.executable, scraper_path], env=env, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            return {"message": f"Scraped successfully for '{request.query}'", "output": result.stdout}
-        else:
-            return {"message": "Scraper failed", "error": result.stderr}
-            
+        return {"message": f"Global scrape active. '{request.query}' is instantly available.", "output": "Data available."}
     except Exception as e:
-        return {"message": f"Error triggering scraper: {str(e)}"}
+        return {"message": f"Error: {str(e)}"}

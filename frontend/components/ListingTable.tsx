@@ -120,16 +120,16 @@ const MAX_BONUSES: Record<string, number> = {
 // Helper to extract numeric value from bonus string and check against max
 const isMaxBonus = (bonusStr: string): boolean => {
   const normalizedBonus = bonusStr.toLowerCase();
-  
+
   for (const [key, maxVal] of Object.entries(MAX_BONUSES)) {
     const normalizedKey = key.toLowerCase();
-    
+
     if (normalizedBonus.includes(normalizedKey)) {
       // Extract number: look for digits (including negative)
       const matches = bonusStr.match(/(-?\d+)/g);
       if (matches) {
         for (const m of matches) {
-           if (parseInt(m) >= maxVal) return true;
+          if (parseInt(m) >= maxVal) return true;
         }
       }
     }
@@ -162,68 +162,67 @@ export default function ListingTable({ listings, fakeSellerNames, onFlagSeller, 
             listings.map((listing) => {
               const isFake = fakeSellerNames?.has(listing.seller_name) ?? false;
               return (
-              <tr key={listing.id} className={`hover:bg-slate-700/50 transition-colors ${isFake ? 'opacity-40 line-through decoration-red-500/50' : ''}`}>
-                <td className="px-6 py-4 align-top">
+                <tr key={listing.id} className={`hover:bg-slate-700/50 transition-colors ${isFake ? 'opacity-40 line-through decoration-red-500/50' : ''}`}>
+                  <td className="px-6 py-4 align-top">
                     <div className="font-bold text-white text-base mb-2 flex items-center gap-2">
-                        {onToggleFavorite && (
-                          <button
-                            onClick={() => onToggleFavorite(listing.item.name)}
-                            className="flex-shrink-0 p-0.5 rounded transition-colors hover:scale-110"
-                            title={favorites?.has(listing.item.name) ? 'Favorit entfernen' : 'Als Favorit markieren'}
-                          >
-                            <Star
-                              size={16}
-                              className={favorites?.has(listing.item.name)
-                                ? 'text-yellow-400 fill-yellow-400'
-                                : 'text-slate-600 hover:text-yellow-400'}
-                            />
-                          </button>
-                        )}
-                        {listing.item.name}
+                      {onToggleFavorite && (
+                        <button
+                          onClick={() => onToggleFavorite(listing.item.name)}
+                          className="flex-shrink-0 p-0.5 rounded transition-colors hover:scale-110"
+                          title={favorites?.has(listing.item.name) ? 'Favorit entfernen' : 'Als Favorit markieren'}
+                        >
+                          <Star
+                            size={16}
+                            className={favorites?.has(listing.item.name)
+                              ? 'text-yellow-400 fill-yellow-400'
+                              : 'text-slate-600 hover:text-yellow-400'}
+                          />
+                        </button>
+                      )}
+                      {listing.item.name}
                     </div>
                     {listing.bonuses && listing.bonuses.length > 0 && (
-                        <ul className="space-y-1">
-                            {listing.bonuses.map((bonus, idx) => {
-                                const isMax = isMaxBonus(bonus.bonus_name);
-                                return (
-                                    <li 
-                                        key={idx} 
-                                        className={`text-xs px-2 py-0.5 rounded w-fit ${
-                                            isMax 
-                                            ? "text-purple-400 font-bold bg-purple-900/30 border border-purple-500/30" 
-                                            : "text-slate-400 bg-slate-800/50"
-                                        }`}
-                                    >
-                                        {bonus.bonus_name}
-                                    </li>
-                                );
-                            })}
-                        </ul>
+                      <ul className="space-y-1">
+                        {listing.bonuses.map((bonus, idx) => {
+                          const isMax = isMaxBonus(bonus.bonus_name);
+                          return (
+                            <li
+                              key={idx}
+                              className={`text-xs px-2 py-0.5 rounded w-fit ${isMax
+                                  ? "text-purple-400 font-bold bg-purple-900/30 border border-purple-500/30"
+                                  : "text-slate-400 bg-slate-800/50"
+                                }`}
+                            >
+                              {bonus.bonus_name}
+                            </li>
+                          );
+                        })}
+                      </ul>
                     )}
-                </td>
-                <td className="px-6 py-4 align-top">{listing.quantity}</td>
-                <td className="px-6 py-4 text-yellow-500 font-bold align-top text-lg">{listing.price_won} W</td>
-                <td className="px-6 py-4 align-top">{listing.price_yang.toLocaleString()}</td>
-                <td className="px-6 py-4 align-top">
-                  <div className="flex items-center gap-2">
-                    <span className={isFake ? 'text-red-400' : 'text-blue-400'}>{listing.seller_name}</span>
-                    {isFake ? (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-600/20 text-red-400 border border-red-600/30 whitespace-nowrap">FAKE</span>
-                    ) : onFlagSeller ? (
-                      <button
-                        onClick={() => onFlagSeller(listing.seller_name)}
-                        className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
-                        title={`"${listing.seller_name}" als Fake markieren`}
-                      >
-                        <UserX size={14} />
-                      </button>
-                    ) : null}
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-slate-500 align-top text-xs">
-                  {new Date(listing.seen_at).toLocaleString()}
-                </td>
-              </tr>
+                  </td>
+                  <td className="px-6 py-4 align-top">{listing.quantity}</td>
+                  <td className="px-6 py-4 text-yellow-500 font-bold align-top text-lg">{listing.price_won} W</td>
+                  <td className="px-6 py-4 align-top">{listing.price_yang.toLocaleString()}</td>
+                  <td className="px-6 py-4 align-top">
+                    <div className="flex items-center gap-2">
+                      <span className={isFake ? 'text-red-400' : 'text-blue-400'}>{listing.seller_name}</span>
+                      {isFake ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-600/20 text-red-400 border border-red-600/30 whitespace-nowrap">FAKE</span>
+                      ) : onFlagSeller ? (
+                        <button
+                          onClick={() => onFlagSeller(listing.seller_name)}
+                          className="p-1 rounded text-slate-600 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                          title={`"${listing.seller_name}" als Fake markieren`}
+                        >
+                          <UserX size={14} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-slate-500 align-top text-xs">
+                    {new Date(listing.seen_at.replace(' ', 'T') + (listing.seen_at.endsWith('Z') ? '' : 'Z')).toLocaleString()}
+                  </td>
+                </tr>
               );
             })
           )}

@@ -56,7 +56,6 @@ class WatchlistItem(Base):
     query = Column(String, nullable=False)
     server_name = Column(String, nullable=False, default="Chimera")
     is_active = Column(Integer, default=1)
-    interval_minutes = Column(Integer, default=20)
     last_scraped_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

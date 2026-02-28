@@ -40,9 +40,11 @@ class ListingOut(BaseModel):
     class Config:
         from_attributes = True
 
-class WatchlistItemCreate(BaseModel):
+class WatchlistItemBase(BaseModel):
     query: str
     server_name: str = "Chimera"
+
+class WatchlistItemCreate(WatchlistItemBase):
     interval_minutes: int = 20
 
 class PriceAlertOut(BaseModel):
@@ -58,10 +60,8 @@ class PriceAlertOut(BaseModel):
     class Config:
         from_attributes = True
 
-class WatchlistItemOut(BaseModel):
+class WatchlistItemOut(WatchlistItemBase):
     id: int
-    query: str
-    server_name: str
     is_active: int
     interval_minutes: int
     last_scraped_at: Optional[datetime] = None

@@ -89,7 +89,6 @@ export interface WatchlistItem {
   query: string;
   server_name: string;
   is_active: number;
-  interval_minutes: number;
   last_scraped_at: string | null;
   created_at: string | null;
   alerts: PriceAlert[];
@@ -101,10 +100,10 @@ export const getWatchlist = async () => {
   return response.data;
 }
 
-export const addWatchlistItem = async (query: string, server_name: string, interval_minutes: number = 20) => {
-  const response = await api.post<WatchlistItem>('/market/watchlist', { query, server_name, interval_minutes });
+export const addWatchlistItem = async (query: string, server_name: string) => {
+  const response = await api.post<WatchlistItem>('/market/watchlist', { query, server_name });
   return response.data;
-}
+};
 
 export const removeWatchlistItem = async (id: number) => {
   const response = await api.delete(`/market/watchlist/${id}`);

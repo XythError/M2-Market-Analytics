@@ -54,7 +54,6 @@ CREATE TABLE IF NOT EXISTS watchlist (
     query TEXT NOT NULL,
     server_name TEXT NOT NULL DEFAULT 'Chimera',
     is_active INTEGER NOT NULL DEFAULT 1,
-    interval_minutes INTEGER NOT NULL DEFAULT 20,
     last_scraped_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(query, server_name)

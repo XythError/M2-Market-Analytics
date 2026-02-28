@@ -185,8 +185,7 @@ def add_watchlist_item(item: schemas.WatchlistItemCreate, db: Session = Depends(
     
     db_item = models.WatchlistItem(
         query=item.query,
-        server_name=item.server_name,
-        interval_minutes=item.interval_minutes
+        server_name=item.server_name
     )
     db.add(db_item)
     db.commit()

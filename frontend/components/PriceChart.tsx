@@ -54,6 +54,7 @@ interface PriceChartProps {
   onCreatePercentageAlert?: (watchlistId: number, metricA: string, metricB: string, thresholdPct: number) => void;
   onDeletePercentageAlert?: (alertId: number) => void;
   onTogglePercentageAlert?: (alertId: number) => void;
+  overrideVisibleSeries?: Record<string, boolean> | null;
 }
 
 function formatYang(val: number): string {
@@ -111,6 +112,7 @@ export default function PriceChart({
   onCreatePercentageAlert,
   onDeletePercentageAlert,
   onTogglePercentageAlert,
+  overrideVisibleSeries,
 }: PriceChartProps) {
   const [visibleSeries, setVisibleSeries] = useState<Record<SeriesKey, boolean>>({
     avg: true,
@@ -130,7 +132,10 @@ export default function PriceChart({
 
   const labels = data.map(d => {
     try {
-      const date = new Date(d.timestamp);
+      // API returns SQLite UTC timestamps like "2026-02-01 15:53:20". 
+      // Force it to be parsed as UTC by changing space to T and appending Z
+      const safeIsoString = d.timestamp.replace(' ', 'T') + (d.timestamp.endsWith('Z') ? '' : 'Z');
+      const date = new Date(safeIsoString);
       return date.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })
         + ' ' + date.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
     } catch {
@@ -157,9 +162,14 @@ export default function PriceChart({
     _seriesKey: s.key,
   }));
 
+  // Use override if provided (auto mode), otherwise use local state
+  const effectiveSeries = overrideVisibleSeries
+    ? overrideVisibleSeries as Record<SeriesKey, boolean>
+    : visibleSeries;
+
   const chartData = {
     labels,
-    datasets: allDatasets.filter(ds => visibleSeries[ds._seriesKey as SeriesKey]),
+    datasets: allDatasets.filter(ds => effectiveSeries[ds._seriesKey as SeriesKey]),
   };
 
   const options: ChartOptions<'line'> = {
@@ -359,8 +369,8 @@ export default function PriceChart({
                 <div
                   key={alert.id}
                   className={`inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border ${alert.is_active
-                      ? 'border-purple-600/40 bg-purple-600/10 text-purple-300'
-                      : 'border-slate-700 bg-slate-800 text-slate-500'
+                    ? 'border-purple-600/40 bg-purple-600/10 text-purple-300'
+                    : 'border-slate-700 bg-slate-800 text-slate-500'
                     }`}
                 >
                   📐
@@ -388,7 +398,7 @@ export default function PriceChart({
                   )}
                   {alert.last_triggered_at && (
                     <span className="text-[10px] text-slate-500 ml-1">
-                      Letzter: {new Date(alert.last_triggered_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                      Letzter: {new Date(alert.last_triggered_at.replace(' ', 'T') + (alert.last_triggered_at.endsWith('Z') ? '' : 'Z')).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                     </span>
                   )}
                 </div>
