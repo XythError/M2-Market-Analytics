@@ -72,6 +72,19 @@ def ensure_tables():
             scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS percentage_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            watchlist_id INTEGER NOT NULL,
+            metric_a TEXT NOT NULL,
+            metric_b TEXT NOT NULL,
+            threshold_pct REAL NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            last_triggered_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (watchlist_id) REFERENCES watchlist(id) ON DELETE CASCADE
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -173,8 +186,9 @@ def get_active_alerts_for(watchlist_id):
     return alerts
 
 
-def get_current_price(query):
-    """Get the latest min unit price for an item from the listings table, excluding fake sellers."""
+def get_current_prices(query):
+    """Get min, avg_bottom20, and avg prices for an item, excluding fake sellers.
+    Returns dict with keys: 'min', 'avg_bottom20', 'avg' (or None if no data)."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
@@ -193,10 +207,16 @@ def get_current_price(query):
     """, (f"%{query}%",)).fetchall()
     conn.close()
 
-    prices = [row["unit_price"] for row in rows if row["seller_name"] not in fake_sellers and row["unit_price"]]
+    prices = sorted([row["unit_price"] for row in rows if row["seller_name"] not in fake_sellers and row["unit_price"]])
     if not prices:
-        return None, None
-    return min(prices), int(sum(prices) / len(prices))
+        return None
+    total = len(prices)
+    bottom_count = max(1, int(total * 0.2))
+    return {
+        "min": prices[0],
+        "avg_bottom20": int(sum(prices[:bottom_count]) / bottom_count),
+        "avg": int(sum(prices) / total),
+    }
 
 
 def mark_alert_triggered(alert_id):
@@ -225,9 +245,11 @@ def check_alerts_for_item(watchlist_item):
     if not alerts:
         return
 
-    min_price, avg_price = get_current_price(query)
-    if min_price is None:
+    price_data = get_current_prices(query)
+    if price_data is None:
         return
+
+    min_price = price_data["min"]
 
     for alert in alerts:
         threshold = alert["price_threshold"]
@@ -260,6 +282,89 @@ def check_alerts_for_item(watchlist_item):
                 print(f"  ⚠️ Failed to send alert for '{query}': {e}")
 
 
+def get_active_percentage_alerts_for(watchlist_id):
+    """Return active percentage alerts for a watchlist item."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    alerts = conn.execute(
+        "SELECT * FROM percentage_alerts WHERE watchlist_id = ? AND is_active = 1",
+        (watchlist_id,)
+    ).fetchall()
+    conn.close()
+    return alerts
+
+
+def mark_percentage_alert_triggered(alert_id):
+    """Update last_triggered_at for a percentage alert."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE percentage_alerts SET last_triggered_at = ? WHERE id = ?",
+        (datetime.now().isoformat(), alert_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+METRIC_LABELS = {
+    "min": "Minimum",
+    "avg_bottom20": "Ø Günstigste 20%",
+    "avg": "Ø Preis (alle)",
+}
+
+
+def check_percentage_alerts_for_item(watchlist_item):
+    """After scraping, check if any percentage-based deviation alerts should fire."""
+    from .telegram_bot import send_telegram_message_sync, format_percentage_alert_message
+
+    tg = get_telegram_config()
+    if not tg:
+        return
+
+    bot_token, chat_id = tg
+    query = watchlist_item["query"]
+    alerts = get_active_percentage_alerts_for(watchlist_item["id"])
+
+    if not alerts:
+        return
+
+    price_data = get_current_prices(query)
+    if price_data is None:
+        return
+
+    for alert in alerts:
+        metric_a = alert["metric_a"]
+        metric_b = alert["metric_b"]
+        threshold_pct = alert["threshold_pct"]
+
+        val_a = price_data.get(metric_a)
+        val_b = price_data.get(metric_b)
+
+        if val_a is None or val_b is None or val_b == 0:
+            continue
+
+        deviation_pct = abs((val_a - val_b) / val_b) * 100
+
+        if deviation_pct >= threshold_pct:
+            # Cooldown: don't re-trigger within 30 minutes
+            last = alert["last_triggered_at"]
+            if last:
+                last_dt = datetime.fromisoformat(last)
+                if datetime.now() - last_dt < timedelta(minutes=30):
+                    continue
+
+            try:
+                label_a = METRIC_LABELS.get(metric_a, metric_a)
+                label_b = METRIC_LABELS.get(metric_b, metric_b)
+                msg = format_percentage_alert_message(
+                    query, label_a, val_a, label_b, val_b, deviation_pct, threshold_pct
+                )
+                send_telegram_message_sync(bot_token, chat_id, msg)
+                mark_percentage_alert_triggered(alert["id"])
+                print(f"  🔔 %-Alert sent for '{query}' – {label_a}={val_a:,} vs {label_b}={val_b:,} ({deviation_pct:.1f}% >= {threshold_pct}%)")
+            except Exception as e:
+                print(f"  ⚠️ Failed to send %-alert for '{query}': {e}")
+
+
 print("Scheduler started – reading watchlist from DB.")
 ensure_tables()
 ensure_watchlist_seeded()
@@ -275,6 +380,7 @@ if __name__ == "__main__":
                     mark_scraped(item["id"])
                     # Check price alerts after scraping
                     check_alerts_for_item(item)
+                    check_percentage_alerts_for_item(item)
             time.sleep(TICK_SECONDS)
     except KeyboardInterrupt:
         print("Scheduler stopped.")

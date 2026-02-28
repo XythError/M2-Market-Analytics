@@ -61,6 +61,7 @@ class WatchlistItem(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     alerts = relationship("PriceAlert", back_populates="watchlist_item", cascade="all, delete-orphan")
+    percentage_alerts = relationship("PercentageAlert", back_populates="watchlist_item", cascade="all, delete-orphan")
 
 
 class TelegramSettings(Base):
@@ -106,3 +107,17 @@ class PriceAlert(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     watchlist_item = relationship("WatchlistItem", back_populates="alerts")
+
+
+class PercentageAlert(Base):
+    __tablename__ = "percentage_alerts"
+    id = Column(Integer, primary_key=True, index=True)
+    watchlist_id = Column(Integer, ForeignKey("watchlist.id", ondelete="CASCADE"), nullable=False)
+    metric_a = Column(String, nullable=False)         # "min", "avg_bottom20", "avg"
+    metric_b = Column(String, nullable=False)         # "min", "avg_bottom20", "avg"
+    threshold_pct = Column(Float, nullable=False)     # e.g. 15.0 for 15%
+    is_active = Column(Integer, default=1)
+    last_triggered_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    watchlist_item = relationship("WatchlistItem", back_populates="percentage_alerts")

@@ -67,6 +67,7 @@ class WatchlistItemOut(BaseModel):
     last_scraped_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     alerts: List[PriceAlertOut] = []
+    percentage_alerts: List['PercentageAlertOut'] = []
 
     class Config:
         from_attributes = True
@@ -92,6 +93,25 @@ class PriceAlertCreate(BaseModel):
     price_threshold: int
     price_type: str = "yang"       # "yang" or "won"
     direction: str = "below"       # "below" or "above"
+
+class PercentageAlertCreate(BaseModel):
+    watchlist_id: int
+    metric_a: str          # "min", "avg_bottom20", "avg"
+    metric_b: str          # "min", "avg_bottom20", "avg"
+    threshold_pct: float   # e.g. 15.0 for 15%
+
+class PercentageAlertOut(BaseModel):
+    id: int
+    watchlist_id: int
+    metric_a: str
+    metric_b: str
+    threshold_pct: float
+    is_active: int
+    last_triggered_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
 
 # ── Fake Sellers ────────────────────────────────────────────────
 

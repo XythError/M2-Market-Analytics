@@ -309,6 +309,60 @@ def toggle_alert(alert_id: int, db: Session = Depends(database.get_db)):
     db.refresh(alert)
     return alert
 
+# ── Percentage Alerts ───────────────────────────────────────────
+
+VALID_METRICS = {"min", "avg_bottom20", "avg"}
+
+@router.get("/percentage-alerts", response_model=List[schemas.PercentageAlertOut])
+def get_percentage_alerts(watchlist_id: Optional[int] = None, db: Session = Depends(database.get_db)):
+    """Get all percentage-based alerts, optionally filtered by watchlist item."""
+    q = db.query(models.PercentageAlert)
+    if watchlist_id is not None:
+        q = q.filter(models.PercentageAlert.watchlist_id == watchlist_id)
+    return q.order_by(models.PercentageAlert.created_at.desc()).all()
+
+@router.post("/percentage-alerts", response_model=schemas.PercentageAlertOut)
+def create_percentage_alert(body: schemas.PercentageAlertCreate, db: Session = Depends(database.get_db)):
+    """Create a percentage-based deviation alert for a watchlist item."""
+    if body.metric_a not in VALID_METRICS or body.metric_b not in VALID_METRICS:
+        raise HTTPException(status_code=400, detail=f"Invalid metric. Must be one of: {VALID_METRICS}")
+    if body.metric_a == body.metric_b:
+        raise HTTPException(status_code=400, detail="metric_a and metric_b must be different")
+    wl = db.query(models.WatchlistItem).filter(models.WatchlistItem.id == body.watchlist_id).first()
+    if not wl:
+        raise HTTPException(status_code=404, detail="Watchlist item not found")
+    alert = models.PercentageAlert(
+        watchlist_id=body.watchlist_id,
+        metric_a=body.metric_a,
+        metric_b=body.metric_b,
+        threshold_pct=body.threshold_pct,
+    )
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return alert
+
+@router.delete("/percentage-alerts/{alert_id}")
+def delete_percentage_alert(alert_id: int, db: Session = Depends(database.get_db)):
+    """Delete a percentage-based alert."""
+    alert = db.query(models.PercentageAlert).filter(models.PercentageAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Percentage alert not found")
+    db.delete(alert)
+    db.commit()
+    return {"message": "Percentage alert deleted"}
+
+@router.patch("/percentage-alerts/{alert_id}/toggle")
+def toggle_percentage_alert(alert_id: int, db: Session = Depends(database.get_db)):
+    """Toggle a percentage-based alert on/off."""
+    alert = db.query(models.PercentageAlert).filter(models.PercentageAlert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Percentage alert not found")
+    alert.is_active = 0 if alert.is_active else 1
+    db.commit()
+    db.refresh(alert)
+    return alert
+
 # ── Fake Sellers ────────────────────────────────────────────────
 
 @router.get("/fake-sellers", response_model=List[schemas.FakeSellerOut])

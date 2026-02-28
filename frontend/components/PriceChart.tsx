@@ -14,6 +14,7 @@ import {
   Filler
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
+import { Bell, Trash2, BellOff, Plus } from 'lucide-react';
 
 ChartJS.register(
   CategoryScale,
@@ -34,9 +35,25 @@ interface PricePoint {
   total_listings: number;
 }
 
+interface PercentageAlert {
+  id: number;
+  watchlist_id: number;
+  metric_a: string;
+  metric_b: string;
+  threshold_pct: number;
+  is_active: number;
+  last_triggered_at: string | null;
+  created_at: string | null;
+}
+
 interface PriceChartProps {
   itemName: string;
   data: PricePoint[];
+  watchlistId?: number | null;
+  percentageAlerts?: PercentageAlert[];
+  onCreatePercentageAlert?: (watchlistId: number, metricA: string, metricB: string, thresholdPct: number) => void;
+  onDeletePercentageAlert?: (alertId: number) => void;
+  onTogglePercentageAlert?: (alertId: number) => void;
 }
 
 function formatYang(val: number): string {
@@ -80,12 +97,32 @@ const SERIES_CONFIG: { key: SeriesKey; label: string; color: string; bgColor: st
   },
 ];
 
-export default function PriceChart({ itemName, data }: PriceChartProps) {
+const METRIC_OPTIONS = [
+  { value: 'min', label: 'Minimum' },
+  { value: 'avg_bottom20', label: 'Ø Günstigste 20%' },
+  { value: 'avg', label: 'Ø Preis (alle)' },
+];
+
+export default function PriceChart({
+  itemName,
+  data,
+  watchlistId,
+  percentageAlerts = [],
+  onCreatePercentageAlert,
+  onDeletePercentageAlert,
+  onTogglePercentageAlert,
+}: PriceChartProps) {
   const [visibleSeries, setVisibleSeries] = useState<Record<SeriesKey, boolean>>({
     avg: true,
     bottom20: true,
     min: true,
   });
+
+  // Alert creation form state
+  const [newMetricA, setNewMetricA] = useState('min');
+  const [newMetricB, setNewMetricB] = useState('avg_bottom20');
+  const [newThreshold, setNewThreshold] = useState('');
+  const [showAlertForm, setShowAlertForm] = useState(false);
 
   const toggleSeries = (key: SeriesKey) => {
     setVisibleSeries(prev => ({ ...prev, [key]: !prev[key] }));
@@ -184,6 +221,20 @@ export default function PriceChart({ itemName, data }: PriceChartProps) {
     }
   };
 
+  const handleCreateAlert = () => {
+    if (!watchlistId || !onCreatePercentageAlert || !newThreshold) return;
+    const pct = parseFloat(newThreshold);
+    if (isNaN(pct) || pct <= 0) return;
+    if (newMetricA === newMetricB) return;
+    onCreatePercentageAlert(watchlistId, newMetricA, newMetricB, pct);
+    setNewThreshold('');
+    setShowAlertForm(false);
+  };
+
+  const getMetricLabel = (metric: string) => {
+    return METRIC_OPTIONS.find(m => m.value === metric)?.label || metric;
+  };
+
   return (
     <div className="w-full h-full p-4 bg-slate-800 rounded-lg border border-slate-700">
       <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -195,8 +246,8 @@ export default function PriceChart({ itemName, data }: PriceChartProps) {
               key={s.key}
               onClick={() => toggleSeries(s.key)}
               className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-all duration-200 border ${visibleSeries[s.key]
-                  ? 'border-slate-600 bg-slate-700 text-white shadow-sm'
-                  : 'border-slate-700 bg-slate-800/50 text-slate-500 hover:text-slate-400'
+                ? 'border-slate-600 bg-slate-700 text-white shadow-sm'
+                : 'border-slate-700 bg-slate-800/50 text-slate-500 hover:text-slate-400'
                 }`}
             >
               <span
@@ -220,6 +271,132 @@ export default function PriceChart({ itemName, data }: PriceChartProps) {
           </div>
         )}
       </div>
+
+      {/* Percentage Alert Configuration – below the chart */}
+      {watchlistId && onCreatePercentageAlert && (
+        <div className="mt-4 border-t border-slate-700 pt-4">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+              <Bell size={14} className="text-purple-400" />
+              Abweichungs-Alerts
+              {percentageAlerts.length > 0 && (
+                <span className="ml-1 text-xs px-2 py-0.5 rounded-full bg-purple-600/20 text-purple-400">
+                  {percentageAlerts.filter(a => a.is_active).length} aktiv
+                </span>
+              )}
+            </h4>
+            <button
+              onClick={() => setShowAlertForm(!showAlertForm)}
+              className="text-xs px-3 py-1.5 rounded-lg bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 transition-colors flex items-center gap-1.5 font-medium"
+            >
+              <Plus size={12} />
+              {showAlertForm ? 'Abbrechen' : 'Neuer Alert'}
+            </button>
+          </div>
+
+          {/* Alert creation form */}
+          {showAlertForm && (
+            <div className="mb-4 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50 space-y-3">
+              <p className="text-xs text-slate-500">
+                Benachrichtigung wenn die Abweichung zwischen zwei Metriken einen Schwellenwert überschreitet.
+              </p>
+              <div className="flex flex-wrap gap-3 items-end">
+                <div className="flex-1 min-w-[140px]">
+                  <label className="text-[11px] text-slate-500 block mb-1">Metrik A</label>
+                  <select
+                    value={newMetricA}
+                    onChange={e => setNewMetricA(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-purple-500"
+                  >
+                    {METRIC_OPTIONS.map(m => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="text-slate-500 text-sm pb-1.5">weicht</div>
+                <div className="w-24">
+                  <label className="text-[11px] text-slate-500 block mb-1">Schwelle %</label>
+                  <input
+                    type="number"
+                    placeholder="z.B. 15"
+                    value={newThreshold}
+                    onChange={e => setNewThreshold(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-purple-500 font-mono"
+                  />
+                </div>
+                <div className="text-slate-500 text-sm pb-1.5">% von</div>
+                <div className="flex-1 min-w-[140px]">
+                  <label className="text-[11px] text-slate-500 block mb-1">Metrik B</label>
+                  <select
+                    value={newMetricB}
+                    onChange={e => setNewMetricB(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-purple-500"
+                  >
+                    {METRIC_OPTIONS.map(m => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={handleCreateAlert}
+                  disabled={!newThreshold || parseFloat(newThreshold) <= 0 || newMetricA === newMetricB}
+                  className="bg-purple-600 hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-4 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5"
+                >
+                  <Bell size={14} />
+                  Erstellen
+                </button>
+              </div>
+              {newMetricA === newMetricB && (
+                <p className="text-xs text-red-400">Metrik A und B müssen unterschiedlich sein.</p>
+              )}
+            </div>
+          )}
+
+          {/* Active percentage alerts list */}
+          {percentageAlerts.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {percentageAlerts.map(alert => (
+                <div
+                  key={alert.id}
+                  className={`inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border ${alert.is_active
+                      ? 'border-purple-600/40 bg-purple-600/10 text-purple-300'
+                      : 'border-slate-700 bg-slate-800 text-slate-500'
+                    }`}
+                >
+                  📐
+                  <span className="font-medium">{getMetricLabel(alert.metric_a)}</span>
+                  <span className="text-[10px] opacity-60">↔</span>
+                  <span className="font-medium">{getMetricLabel(alert.metric_b)}</span>
+                  <span className="text-purple-400 font-bold">{alert.threshold_pct}%</span>
+                  {onTogglePercentageAlert && (
+                    <button
+                      onClick={() => onTogglePercentageAlert(alert.id)}
+                      className="ml-1 hover:text-white transition-colors"
+                      title={alert.is_active ? 'Deaktivieren' : 'Aktivieren'}
+                    >
+                      {alert.is_active ? <Bell size={12} /> : <BellOff size={12} />}
+                    </button>
+                  )}
+                  {onDeletePercentageAlert && (
+                    <button
+                      onClick={() => onDeletePercentageAlert(alert.id)}
+                      className="hover:text-red-400 transition-colors"
+                      title="Löschen"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                  {alert.last_triggered_at && (
+                    <span className="text-[10px] text-slate-500 ml-1">
+                      Letzter: {new Date(alert.last_triggered_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -47,3 +47,21 @@ def format_alert_message(item_name: str, price: int, price_type: str, direction:
         f"📊 <b>Schwelle:</b> {direction}\n"
         f"🕐 {now_str}"
     )
+
+
+def format_percentage_alert_message(
+    item_name: str,
+    label_a: str, val_a: int,
+    label_b: str, val_b: int,
+    deviation_pct: float, threshold_pct: float
+) -> str:
+    """Build a Telegram message for percentage-based deviation alerts."""
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+    return (
+        f"📐 <b>Abweichungs-Alert ausgelöst!</b>\n\n"
+        f"📦 <b>Item:</b> {item_name}\n"
+        f"📊 <b>{label_a}:</b> {val_a:,} Yang\n"
+        f"📊 <b>{label_b}:</b> {val_b:,} Yang\n"
+        f"📈 <b>Abweichung:</b> {deviation_pct:.1f}% (Schwelle: {threshold_pct}%)\n"
+        f"🕐 {now_str}"
+    )
