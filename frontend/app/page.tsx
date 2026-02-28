@@ -719,7 +719,7 @@ export default function Home() {
             title="Total Listings" 
             value={filteredListings.length} 
             icon={ShoppingCart} 
-            trend={upgradeFilter !== "ALL" ? "Filtered View" : "+12% from yesterday"}
+            trend={upgradeFilter !== "ALL" ? "Filtered View" : `Server: ${selectedServer}`}
           />
           
           <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 relative group">
